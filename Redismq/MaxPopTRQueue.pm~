@@ -1,0 +1,163 @@
+package Redismq::TimedRetryQueue;
+
+use strict;
+use warnings;
+
+use Sys::Hostname;
+use Time::HiRes qw/time/;
+
+use Moo;
+use Redismq::RedisScript::Pop;
+use Redismq::RedisScript::Push;
+
+extends 'Redismq';
+
+has 'name'
+  => (
+      is => 'ro',
+      required => 1,
+     );
+
+has 'name_assigned'
+  => (
+      is => 'lazy',
+      default=> sub{ $_[0]->name . q{_assigned} },
+     );
+
+has 'result_prefix'
+  => (
+      is => 'lazy',
+      default => sub{ $_[0]->name .q{_result_} },
+     );
+
+has 'pop_s'
+  => (
+      is => 'lazy',
+      default => sub { Redismq::RedisScript::Pop->new(
+						      redis => $_[0]->redis
+						     );
+		     },
+     );
+
+has 'push_s'
+  => (
+      is => 'lazy',
+      default => sub { Redismq::RedisScript::Push->new(
+						       redis => $_[0]->redis
+						      );
+		     },
+     );
+
+has 'pop_timeout'
+  => (
+      is => 'ro',
+      default => 600,
+     );
+
+has 'max_retries'
+  => (
+      is => 'ro',
+      default => 5,
+     );
+
+has 'result_timeout'
+  => (
+      is => 'ro',
+      default => 3600,
+     );
+
+sub size {
+  my $self = shift;
+  return $self->redis()->zcard( $self->name );
+}
+
+sub assigned_size {
+  my $self = shift;
+  return $self->redis()->zcard( $self->name_assigned );
+}
+
+sub message_retries_count {
+  my $self = shift;
+  my ($message) = @_;
+
+  my $retries_count = $self->redis->get( $message .q{_retries_count} );
+  return ( $retries_count ? $retries_count : 0 );
+}
+
+sub drop {
+  my $self = shift;
+  my ($m_id) = @_;
+
+  # try to remove from assigned queue
+  my $c = $self->redis()->zrem( $self->name_assigned, $m_id );
+  return $c if $c;
+
+  # try to remove from main queue
+  $c = $self->redis()->zrem( $self->name, $m_id );
+  return $c;
+}
+
+sub done {
+  my $self = shift;
+  my ($message, $result) = @_;
+
+  $self->drop( $message );
+
+  $self->redis()->setex( $self->result_prefix . $message,
+			 $self->result_timeout,
+			 $result );
+  return;
+}
+
+sub get_result {
+  my $self = shift;
+  my ($message) = @_;
+
+  my $r = $self->redis()->get( $self->result_prefix . $message );
+
+  return $r;
+}
+
+sub pop {
+  my $self = shift;
+  my $message = $self->pop_s()->eval_rs
+    (
+     # keys
+     [ $self->name,
+       $self->name_assigned,
+     ],
+     # argv
+     [ time(),
+       time() + $self->pop_timeout,
+       ($self->max_retries * $self->pop_timeout),
+     ]);
+  return
+    unless defined $message;
+
+  my $r_count = $self->message_retries_count( $message );
+  if( $r_count > $self->max_retries ) {
+    # too old -> drop and get other
+    $self->drop( $message );
+    return $self->pop();
+  }
+
+  return $message;
+}
+
+sub push {
+  my $self = shift;
+  my @argv = @_;
+  if( scalar( @argv ) == 1) {
+    unshift( @argv, time() );
+  }
+
+  return $self->push_s()->eval_rs(
+				  # keys
+				  [ $self->name,
+				  ],
+				  # argv
+				  \@argv,
+				);
+}
+
+1;

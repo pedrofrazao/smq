@@ -1,0 +1,61 @@
+#!/bin/env perl
+
+use warnings;
+use strict;
+use Test::More;
+use FindBin;
+use Time::HiRes qw/time sleep/;
+
+use lib $FindBin::Bin .q{/../};
+
+my $test_count = 1;
+
+use_ok( q{Redismq::TimedRetryQueue} );
+
+my $mq = Redismq::TimedRetryQueue->new( { name => q{mq_test},
+					  pop_timeout => 10,
+					  max_retries => 6,
+					} );
+my $qsize = 100_000;
+
+#
+# clean db
+#
+$mq->redis->FLUSHALL();
+is( $mq->redis->keys( '*' ), 0, q{empty db} );
+$test_count++;
+my $q_size = $mq->size();
+my $q_ass_size = $mq->assigned_size();
+
+#
+# push messages
+#
+for my $i (1.. $qsize) {
+  $mq->push( q{m_}.$i);
+}
+$mq->push( q{end} );
+is( $mq->size(), ($qsize+1), q{queue size});
+$test_count++;
+
+if( my $pid = fork ) {
+  my $st = time;
+  waitpid( $pid, 0 );
+  my $et = time;
+
+  pass(q{elapsed time: } . ( $et - $st ).q{ sec} );
+} else {
+  while(1) {
+
+    my $m = $mq->pop();
+    sleep(1);
+    $mq->done( $m, q{ok} )
+      if $m;
+    exit
+      if $m eq q{end};
+  }
+}
+
+is( $mq->size(), 0, q{empty queue});
+$test_count++;
+
+done_testing( $test_count );

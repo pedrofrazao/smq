@@ -1,0 +1,32 @@
+package Redismq::RedisScript::Unpop;
+
+use strict;
+use warnings;
+
+use Moo;
+extends 'Redismq::RedisScript';
+
+has '+code'
+  => (
+      is => 'ro',
+      default => <<EOCB,
+local zset = KEYS[1]
+local zset_assigned = KEYS[2]
+local now = ARGV[1]
+local message_timeout = ARGV[2]
+local message_timedout = redis.call('zrangebyscore', zset_assigned, 0, now,'limit',0,1)
+if message_timedout ~= false and #message_timedout ~= 0 then
+  print("move (unpop) " .. #message_timedout .." messages after timeout " .. message_timedout[1])
+  redis.call('zrem',zset_assigned, message_timedout[1])
+  redis.call('zadd',zset,now, message_timedout[1])
+  redis.call('incr',message_timedout[1].."_retries_count")
+  redis.call('expire', message_timedout[1].."_retries_count", message_timeout)
+  return 1
+else
+  return 0
+end
+return
+EOCB
+     );
+
+1;

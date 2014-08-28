@@ -1,0 +1,75 @@
+#!/bin/env perl
+
+use warnings;
+use strict;
+use Test::More;
+use FindBin;
+use Time::HiRes;
+
+use lib $FindBin::Bin .q{/../};
+
+my $test_count = 1;
+
+use_ok( q{Redismq::TimedRetryQueue} );
+
+my $mq = Redismq::TimedRetryQueue->new( { name => q{mq_test},
+					  pop_timeout => 10,
+					  max_retries => 6,
+					} );
+my $qsize = 100_000;
+
+#
+# clean db
+#
+$mq->redis->FLUSHALL();
+is( $mq->redis->keys( '*' ), 0, q{empty db} );
+$test_count++;
+my $q_size = $mq->size();
+my $q_ass_size = $mq->assigned_size();
+
+#
+# push messages
+#
+for my $i (1.. $qsize) {
+  $mq->push( q{m_}.$i);
+}
+$mq->push( q{end_1} );
+$mq->push( q{end_2} );
+is( $mq->size(), ($qsize+2), q{queue size }. $qsize);
+$test_count++;
+
+my @pid = ();
+
+my $st = time;
+for(1..4) {
+  if( my $pid = fork ) {
+    push(@pid, $pid);
+  } else {
+    diag(qq{worker $$\n});
+    while(1) {
+      my $m = $mq->pop();
+      if( $m ) {
+	sleep(1);
+	$mq->done( $m, q{ok} );
+	exit
+	  if $m =~ m{^end_\d+$};
+      } else {
+	sleep( 1 );
+      }
+    }
+  }
+}
+
+is(scalar @pid,2,q{2 workers} );
+my $et;
+while( my $p = pop(@pid) ) {
+  waitpid( $p, 0 );
+  $et = time;
+}
+
+pass(q{elapsed time: } . ( $et - $st ).q{ sec} );
+
+is( $mq->size(), 0, q{empty queue});
+$test_count++;
+
+done_testing( $test_count );

@@ -1,0 +1,61 @@
+package Redismq::Queue;
+
+use strict;
+use warnings;
+
+use Moo;
+
+extends 'Redismq';
+
+#
+# lua script
+#
+use constant PUSH_M => <<EOLC;
+eval "local val=tonumber(redis.call('get','c')); if( val<10) then val=val+1; redis.call('set','c',val); end; return redis.call('get','c');" 0
+
+
+local val=redis.call('get','c');
+if( val<10) then val=val+1;
+EOLC
+
+
+has 'name'
+  => (
+      is => 'ro',
+      required => 1,
+     );
+
+has 'pop_sha'
+  => (
+      is => 'rwp',
+      lazy => 1,
+      default => \&__pop_sha,
+     );
+
+sub push {
+  my $self = shift;
+  my ( $message ) = @_;
+  return $self->redis()->zadd( $self->name, time(), $message );
+}
+
+sub pop {
+  my $self = shift;
+  my $m = $self->redis()->zrange( $self->name, 0, 1 );
+  $self->redis()->zrem( $self->name, $m->[0] );
+  return $m->[0];
+}
+
+sub size {
+  my $self = shift;
+  return $self->redis()->zcard( $self->name );
+}
+
+sub __pop_sha {
+  my $self = shift;
+
+  
+
+}
+
+
+1;

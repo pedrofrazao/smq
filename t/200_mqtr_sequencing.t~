@@ -1,0 +1,121 @@
+#!/bin/env perl
+
+use warnings;
+use strict;
+use Test::More;
+use FindBin;
+use Time::HiRes qw/time sleep/;
+
+use lib $FindBin::Bin .q{/../};
+
+my $test_count = 1;
+
+use_ok( q{Redismq::MaxPopTRQueue} );
+
+use constant POP_TIMEOUT => 1;
+
+my $mq = Redismq::MaxPopTRQueue->new( { name => q{mq_test},
+					pop_timeout => POP_TIMEOUT,
+					max_retries => 6,
+					max_pop => 1,
+				      } );
+
+#
+# clean db
+#
+$mq->redis->FLUSHALL();
+is( $mq->redis->keys( '*' ), 0, q{empty db} );
+$test_count++;
+my $q_size = $mq->size();
+my $q_ass_size = $mq->assigned_size();
+
+#
+# push messages
+#
+for my $i (1..10) {
+  $mq->push( q{m_}.$i );
+  is( $mq->size(), ( $q_size + $i ), q{queue size }.( $q_size + $i ) );
+  $test_count++;
+}
+
+#
+# pop messages
+#
+for my $i (1..5) {
+  my $m = $mq->pop();
+  is( $m, q{m_1}, q{pop 1st message and timeout} );
+  $test_count++;
+  sleep( POP_TIMEOUT );
+}
+
+done_testing( $test_count );
+
+__END__
+
+  if( $i<= 5) {
+    ok( $m =~ m{\A m $i _}smx, q{got message }.$m);
+    $test_count++;
+    is( $mq->size(), 10-$i , (10-$i). q{ messages on the queue} );
+    $test_count++;
+    is( $mq->assigned_size(), $i, qq{$i message on the assigned queue} );
+    $test_count++;
+  } else {
+    is( $m, undef, qq{no message $i} );
+    $test_count++;
+    is( $mq->size(), 5, q{5 messages on the queue} );
+    $test_count++;
+    is( $mq->assigned_size(), 5, q{5 message on the assigned queue} );
+    $test_count++;
+  }
+}
+
+#
+# mark messages as drop and done at queue
+#
+{
+  is( $mq->drop( q{m10_} ),1, q{message from the queue drooped});
+  $test_count++;
+  is( $mq->pop(), undef, q{no space on the assigned});
+  $test_count++;
+  is( $mq->pop(), undef, q{no space on the assigned 2});
+  $test_count++;
+  is( $mq->size(), 4, q{4 messages on the queue} );
+  $test_count++;
+  is( $mq->assigned_size(), 5, q{5 message on the assigned queue} );
+  $test_count++;
+
+  is( $mq->done( q{m9_}, q{m9_result} ),1, q{m9_ marked as done} );
+  $test_count++;
+  is( $mq->pop(), undef, q{no space on the assigned});
+  $test_count++;
+  is( $mq->pop(), undef, q{no space on the assigned 2});
+  $test_count++;
+  is( $mq->size(), 3, q{3 messages on the queue} );
+  $test_count++;
+  is( $mq->assigned_size(), 5, q{5 message on the assigned queue} );
+  $test_count++;
+}
+
+#
+# mark messages as drop and done at assigned
+#
+{
+  is( $mq->drop( q{m1_}), 1, q{message from the assigned queue dropped} );
+  $test_count++;
+  ok( $mq->pop() =~ m{\A m \d+ _}smx , q{pop new message});
+  $test_count++;
+  is( $mq->size(), 2, q{2 messages on the queue} );
+  $test_count++;
+  is( $mq->assigned_size(), 5, q{5 message on the assigned queue} );
+  $test_count++;
+
+  is( $mq->done( q{m2_}, q{m2_result} ), 1, q{message from the assigned queue marked done} );
+  $test_count++;
+  ok( $mq->pop() =~ m{\A m \d+ _}smx , q{pop new message});
+  $test_count++;
+  is( $mq->size(), 1, q{1 messages on the queue} );
+  $test_count++;
+  is( $mq->assigned_size(), 5, q{5 message on the assigned queue} );
+  $test_count++;
+}
+done_testing( $test_count );

@@ -1,0 +1,42 @@
+package Redismq;
+
+use strict;
+use warnings;
+
+use Redis;
+use Moo;
+use MooX::Singleton;
+
+has 'PeerAddr'
+  => (
+      is => 'lazy',
+      default => q{localhost},
+     );
+
+has 'PeerPort'
+  => (
+      is => 'lazy',
+      default => 6379,
+     );
+
+has 'redis'
+  => (
+      is => 'lazy',
+      default => \&__redis_connect,
+);
+
+has 'connection_string'
+  => (
+      is => 'lazy',
+      default => sub { my $s = shift; return $s->PeerAddr .q{:}. $s->PeerPort; },
+     );
+
+sub __redis_connect {
+  my $self = shift;
+  return Redis->new( server => $self->connection_string(),
+		     reconnect => 1,
+		     encoding => undef,
+		   );
+}
+
+1;
